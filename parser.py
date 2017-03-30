@@ -2,6 +2,8 @@ from urllib.parse import urlparse
 import feedparser, json, logging, psycopg2, os, requests
 
 class NYKParser:
+    # Set logging preferences
+    
     log_level = logging.DEBUG
 
     log = logging.Logger('parser')
@@ -41,7 +43,9 @@ class NYKParser:
         c.close()
 
     def parse(self):
-        """Takes latest feed items and checks whether they are new"""
+        """Takes latest feed items and checks whether they are new"""       
+        # Get feed RSS
+        
         try:
             feed = feedparser.parse('https://yandex.ru/blog/narod-karta/rss')
             self.log.info('feed parsed successfully')
@@ -49,14 +53,16 @@ class NYKParser:
             self.log.warning('an error occured while parsing')
             self.db.close()
             exit()
-
+        
+        # Add counter and titles' list
         i = 0
         self.new_titles = []
 
         while True:
             if feed.entries[i].title == self.latest_title:
                 break
-
+            
+            # If new title, add it and seek deeper
             self.new_titles.append([feed.entries[i].title, feed.entries[i].link])
             i += 1
 
@@ -77,14 +83,15 @@ class NYKParser:
             self.log.info('no new titles, nothing to send')
             self.db.close()
             exit()
-
+        
+        # Onesignal headers and data
         header = {"Content-Type": "application/json",
                   "Authorization": str(os.environ['ONESIGNAL_AUTHORIZATION'])}
         payload = {"app_id": str(os.environ['ONESIGNAL_APP_ID']),
                    "included_segments": ["All"]
                   }
 
-
+        # Customize messages
         if len(self.new_titles) == 1:
             self.log.info('sending one new title')
 
@@ -100,7 +107,8 @@ class NYKParser:
                                    + NYKParser().num(len(self.new_titles))}
             payload["contents"] = {"en": "Нажмите для открытия последнего."}
             payload["url"] = self.new_titles[0][1]
-
+        
+        # Attempt to send a push
         req = requests.post("https://onesignal.com/api/v1/notifications",
                             headers = header,
                             data = json.dumps(payload))
@@ -115,10 +123,12 @@ class NYKParser:
         """Records the latest title to the database"""
 
         c = self.db.cursor()
-
+        
+        # Delete everything from the database
         self.log.info('purging the database')
         c.execute('DELETE FROM titles;')
         self.log.info('purged successfully!')
+        # Add the latest title to the database
         self.log.info('adding ' + self.new_titles[0][0] + ' to the database')
         c.execute('INSERT INTO titles VALUES (%s);', (self.new_titles[0][0],))
         self.log.info('db altering success, exiting')
