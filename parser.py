@@ -1,5 +1,5 @@
 from urllib.parse import urlparse
-import feedparser, logging, psycopg2, os, requests
+import feedparser, json, logging, psycopg2, os, requests
 
 class NYKParser:
     log_level = logging.DEBUG
@@ -47,16 +47,17 @@ class NYKParser:
             self.log.info('feed parsed successfully')
         except Exception:
             self.log.warning('an error occured while parsing')
+            self.db.close()
             exit()
 
         i = 0
         self.new_titles = []
 
         while True:
-            if feed.items[i].title == self.latest_title:
+            if feed.entries[i].title == self.latest_title:
                 break
 
-            self.new_titles.append([feed.items[i].title, feed.items[i].url])
+            self.new_titles.append([feed.entries[i].title, feed.entries[i].link])
             i += 1
 
     def num(self, n):
@@ -74,14 +75,13 @@ class NYKParser:
         """Pushes new titles to Onesignal"""
         if not self.new_titles:
             self.log.info('no new titles, nothing to send')
+            self.db.close()
             exit()
 
         header = {"Content-Type": "application/json",
                   "Authorization": str(os.environ['ONESIGNAL_AUTHORIZATION'])}
         payload = {"app_id": str(os.environ['ONESIGNAL_APP_ID']),
-                   "headings": {"en": "Timetable"},
-                   "contents": {"en": "лол кек"},
-                   "url": "http://lyceum.urfu.ru/study/izmenHtml.php"
+                   "included_segments": ["All"]
                   }
 
 
@@ -90,23 +90,24 @@ class NYKParser:
 
             payload["headings"] = {"en": self.new_titles[0][0]}
             payload["contents"] = {"en": "Нажмите для открытия поста."}
-            payload[url] = self.new_titles[0][1]
+            payload["url"] = self.new_titles[0][1]
 
         else:
             self.log.info('sending ' + str(len(self.new_titles))
                           + ' new titles')
 
             payload["headings"] = {"en": "В Клубе " + str(len(self.new_titles))
-                                   + num(len(self.new_titles))}
+                                   + NYKParser().num(len(self.new_titles))}
             payload["contents"] = {"en": "Нажмите для открытия последнего."}
-            payload[url] = self.new_titles[-1][1]
+            payload["url"] = self.new_titles[0][1]
 
         req = requests.post("https://onesignal.com/api/v1/notifications",
                             headers = header,
                             data = json.dumps(payload))
 
         if req.status_code != requests.codes.ok:
-            self.log.warning('error code' + str(req.status_code))
+            self.log.warning('error code ' + str(req.status_code)
+                             + ': ' + req.text)
         else:
             self.log.info('sent successfully!')
 
@@ -114,11 +115,17 @@ class NYKParser:
         """Records the latest title to the database"""
 
         c = self.db.cursor()
-        c.execute('DELETE FROM titles')
-        c.execute('INSERT INTO titles VALUES %s', (self.new_titles[-1][0],))
 
+        self.log.info('purging the database')
+        c.execute('DELETE FROM titles;')
+        self.log.info('purged successfully!')
+        self.log.info('adding ' + self.new_titles[0][0] + ' to the database')
+        c.execute('INSERT INTO titles VALUES (%s);', (self.new_titles[0][0],))
         self.log.info('db altering success, exiting')
 
+        self.db.commit()
+        c.close()
+        self.db.close()
 
 parse = NYKParser()
 
